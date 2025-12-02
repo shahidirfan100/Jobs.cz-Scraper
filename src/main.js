@@ -1,8 +1,7 @@
-// Jobs.cz scraper - CheerioCrawler implementation with JSON API support
+// Jobs.cz scraper - CheerioCrawler implementation
 import { Actor, log } from 'apify';
-import { PlaywrightCrawler, Dataset } from 'crawlee';
+import { CheerioCrawler, Dataset } from 'crawlee';
 import { load as cheerioLoad } from 'cheerio';
-import { gotScraping } from 'got-scraping';
 
 // Single-entrypoint main
 await Actor.init();
@@ -32,17 +31,43 @@ async function main() {
 
         const buildStartUrl = (kw, loc, cat) => {
             const u = new URL('https://www.jobs.cz/prace/');
-            if (kw) u.searchParams.set('q[]', String(kw).trim());
-            if (loc) u.searchParams.set('locality[]', String(loc).trim());
-            if (cat) u.searchParams.set('category[]', String(cat).trim());
-            return u.href;
+            if (kw) {
+                const keywords = String(kw).trim();
+                u.searchParams.set('q[]', keywords);
+                log.info(`Searching for keyword: "${keywords}"`);
+            }
+            if (loc) {
+                const locality = String(loc).trim();
+                u.searchParams.set('locality[]', locality);
+                log.info(`Filtering by location: "${locality}"`);
+            }
+            if (cat) {
+                const categoryVal = String(cat).trim();
+                u.searchParams.set('category[]', categoryVal);
+                log.info(`Filtering by category: "${categoryVal}"`);
+            }
+            const finalUrl = u.href;
+            log.info(`Built search URL: ${finalUrl}`);
+            return finalUrl;
         };
 
         const initial = [];
-        if (Array.isArray(startUrls) && startUrls.length) initial.push(...startUrls);
-        if (startUrl) initial.push(startUrl);
-        if (url) initial.push(url);
-        if (!initial.length) initial.push(buildStartUrl(keyword, location, category));
+        if (Array.isArray(startUrls) && startUrls.length) {
+            initial.push(...startUrls);
+            log.info(`Using ${startUrls.length} custom start URL(s)`);
+        }
+        if (startUrl) {
+            initial.push(startUrl);
+            log.info(`Using custom start URL: ${startUrl}`);
+        }
+        if (url) {
+            initial.push(url);
+            log.info(`Using custom URL: ${url}`);
+        }
+        if (!initial.length) {
+            const builtUrl = buildStartUrl(keyword, location, category);
+            initial.push(builtUrl);
+        }
 
         const proxyConf = proxyConfiguration ? await Actor.createProxyConfiguration({ ...proxyConfiguration }) : undefined;
 
@@ -102,40 +127,41 @@ async function main() {
             return [...links];
         }
 
-        function findNextPage($, base, currentPage) {
+        function findNextPage(baseUrl, currentPage) {
             // Jobs.cz uses page parameter for pagination
             const nextPage = currentPage + 1;
-            const url = new URL(base);
-            url.searchParams.set('page', String(nextPage));
-            return url.href;
+            try {
+                const url = new URL(baseUrl);
+                url.searchParams.set('page', String(nextPage));
+                return url.href;
+            } catch (err) {
+                log.warning(`Failed to construct next page URL from ${baseUrl}: ${err.message}`);
+                return null;
+            }
         }
 
-        const crawler = new PlaywrightCrawler({
+        function hasNextPage($) {
+            // Check if there's a next page link or pagination indicator
+            const nextBtn = $('a[rel="next"]').length > 0;
+            const paginationLinks = $('a[href*="page="]').length > 0;
+            const disabledNext = $('.pagination .disabled:contains("›")').length > 0 || 
+                                $('.pagination .disabled:contains("Další")').length > 0;
+            return (nextBtn || paginationLinks) && !disabledNext;
+        }
+
+        const crawler = new CheerioCrawler({
             proxyConfiguration: proxyConf,
             maxRequestRetries: 3,
             useSessionPool: true,
-            maxConcurrency: 5,
-            requestHandlerTimeoutSecs: 60,
-            async requestHandler({ request, page, log: crawlerLog, enqueueLinks }) {
+            maxConcurrency: 10,
+            requestHandlerTimeoutSecs: 90,
+            async requestHandler({ request, $, enqueueLinks, log: crawlerLog }) {
                 const label = request.userData?.label || 'LIST';
                 const pageNo = request.userData?.pageNo || 1;
 
                 if (label === 'LIST') {
-                    await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
-                    const links = await page.$$eval('a[href*="/rpd/"]', (as) => {
-                        const set = new Set();
-                        for (const a of as) {
-                            const href = a.getAttribute('href') || '';
-                            if (/\/rpd\/\d+/i.test(href)) {
-                                try {
-                                    const url = new URL(href, location.href).href.split('?')[0];
-                                    set.add(url);
-                                } catch { /* noop */ }
-                            }
-                        }
-                        return Array.from(set);
-                    });
-                    crawlerLog.info(`LIST page ${pageNo} -> ${links.length} job links`);
+                    const links = findJobLinks($, request.url);
+                    crawlerLog.info(`LIST page ${pageNo} -> ${links.length} job links at ${request.url}`);
 
                     if (collectDetails) {
                         await enqueueDetail(crawler, links);
@@ -150,11 +176,27 @@ async function main() {
                         }
                     }
 
+                    // Check if we should continue pagination
                     if (saved < RESULTS_WANTED && pageNo < MAX_PAGES && links.length > 0) {
-                        const pageHtml = await page.content();
-                        const $page = cheerioLoad(pageHtml);
-                        const next = findNextPage($page, request.url, pageNo);
-                        if (next) await crawler.addRequests([{ url: next, userData: { label: 'LIST', pageNo: pageNo + 1 } }]);
+                        // Check if there's actually a next page available
+                        const hasMore = hasNextPage($);
+                        if (hasMore) {
+                            const next = findNextPage(request.url, pageNo);
+                            if (next) {
+                                crawlerLog.info(`Queueing next page ${pageNo + 1}: ${next}`);
+                                await crawler.addRequests([{ url: next, userData: { label: 'LIST', pageNo: pageNo + 1 } }]);
+                            } else {
+                                crawlerLog.warning(`Could not construct next page URL for page ${pageNo + 1}`);
+                            }
+                        } else {
+                            crawlerLog.info(`No more pages available after page ${pageNo}`);
+                        }
+                    } else if (saved >= RESULTS_WANTED) {
+                        crawlerLog.info(`Reached target of ${RESULTS_WANTED} results`);
+                    } else if (pageNo >= MAX_PAGES) {
+                        crawlerLog.info(`Reached maximum pages limit: ${MAX_PAGES}`);
+                    } else if (links.length === 0) {
+                        crawlerLog.info(`No job links found on page ${pageNo}`);
                     }
                     return;
                 }
@@ -162,9 +204,6 @@ async function main() {
                 if (label === 'DETAIL') {
                     if (saved >= RESULTS_WANTED) return;
                     try {
-                        await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
-                        const html = await page.content();
-                        const $ = cheerioLoad(html);
                         const json = extractFromJsonLd($);
                         const data = json || {};
                         
