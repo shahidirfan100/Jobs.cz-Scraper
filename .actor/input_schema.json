@@ -1,0 +1,70 @@
+{
+  "title": "Jobs.cz Scraper",
+  "description": "Extract job listings from Jobs.cz, the leading Czech job portal. Search by keyword, location, and category, or provide a direct Jobs.cz search URL. The scraper automatically handles pagination and extracts comprehensive job details.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrl": {
+      "title": "Start URL",
+      "type": "string",
+      "description": "Start scraping from a specific Jobs.cz search URL. If provided, this overrides the Keyword/Location/Category fields.",
+      "editor": "textfield"
+    },
+    "keyword": {
+      "title": "Job Keyword",
+      "type": "string",
+      "description": "Job title or skill to search for. Examples: 'vývojář', 'programátor', 'účetní', 'prodavač', 'projektový manažer'.",
+      "editor": "textfield",
+      "prefill": "vývojář"
+    },
+    "location": {
+      "title": "Location",
+      "type": "string",
+      "description": "City or region in Czech Republic. Examples: 'Praha', 'Brno', 'Ostrava', 'Plzeň'. Leave empty to search all locations.",
+      "editor": "textfield",
+      "prefill": "Praha"
+    },
+    "collectDetails": {
+      "title": "Collect Full Job Details",
+      "type": "boolean",
+      "description": "Enable to visit each job detail page and extract complete job descriptions, requirements, and company information.",
+      "editor": "checkbox",
+      "default": true
+    },
+    "results_wanted": {
+      "title": "Maximum Results",
+      "type": "integer",
+      "description": "Maximum number of job listings to scrape. Set a lower number for faster runs or higher for comprehensive data extraction.",
+      "minimum": 1,
+      "default": 100,
+      "editor": "number"
+    },
+    "max_pages": {
+      "title": "Maximum Pages",
+      "type": "integer",
+      "description": "Safety limit on the number of search result pages to crawl. Prevents excessive scraping.",
+      "minimum": 1,
+      "editor": "number",
+      "default": 20
+    },
+    "proxyConfiguration": {
+      "title": "Proxy Configuration",
+      "type": "object",
+      "description": "Configure proxy settings for reliable scraping. Residential proxies recommended for Jobs.cz to avoid blocking.",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"]
+      }
+    },
+    "dedupe": {
+      "title": "Deduplicate Results",
+      "type": "boolean",
+      "description": "Automatically remove duplicate job listings based on URL to ensure unique results.",
+      "editor": "checkbox",
+      "default": true
+  }
+},
+  "required": [],
+  "additionalProperties": false
+}
