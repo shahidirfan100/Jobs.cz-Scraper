@@ -63,8 +63,8 @@
       "description": "Automatically remove duplicate job listings based on URL to ensure unique results.",
       "editor": "checkbox",
       "default": true
-  }
-},
+    }
+  },
   "required": [],
   "additionalProperties": false
 }

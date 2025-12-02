@@ -1,6 +1,6 @@
 // Jobs.cz scraper - CheerioCrawler implementation with JSON API support
 import { Actor, log } from 'apify';
-import { CheerioCrawler, Dataset } from 'crawlee';
+import { PlaywrightCrawler, Dataset } from 'crawlee';
 import { load as cheerioLoad } from 'cheerio';
 import { gotScraping } from 'got-scraping';
 
@@ -13,6 +13,7 @@ async function main() {
         const {
             keyword = '', location = '', category = '', results_wanted: RESULTS_WANTED_RAW = 100,
             max_pages: MAX_PAGES_RAW = 999, collectDetails = true, startUrl, startUrls, url, proxyConfiguration,
+            dedupe = true,
         } = input;
 
         const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : Number.MAX_SAFE_INTEGER;
@@ -47,6 +48,15 @@ async function main() {
 
         let saved = 0;
         const seenUrls = new Set();
+
+        const enqueueDetail = async (crawler, links) => {
+            const remaining = RESULTS_WANTED - saved;
+            const uniqueLinks = dedupe ? links.filter(l => !seenUrls.has(l)) : links;
+            uniqueLinks.forEach(l => seenUrls.add(l));
+            const toTake = uniqueLinks.slice(0, Math.max(0, remaining));
+            if (!toTake.length) return;
+            await crawler.addRequests(toTake.map(u => ({ url: u, userData: { label: 'DETAIL' } })));
+        };
 
         function extractFromJsonLd($) {
             const scripts = $('script[type="application/ld+json"]');
@@ -100,40 +110,51 @@ async function main() {
             return url.href;
         }
 
-        const crawler = new CheerioCrawler({
+        const crawler = new PlaywrightCrawler({
             proxyConfiguration: proxyConf,
             maxRequestRetries: 3,
             useSessionPool: true,
-            maxConcurrency: 10,
+            maxConcurrency: 5,
             requestHandlerTimeoutSecs: 60,
-            async requestHandler({ request, $, enqueueLinks, log: crawlerLog }) {
+            async requestHandler({ request, page, log: crawlerLog, enqueueLinks }) {
                 const label = request.userData?.label || 'LIST';
                 const pageNo = request.userData?.pageNo || 1;
 
                 if (label === 'LIST') {
-                    const links = findJobLinks($, request.url);
-                    crawlerLog.info(`LIST page ${pageNo} at ${request.url} -> found ${links.length} job links`);
+                    await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+                    const links = await page.$$eval('a[href*="/rpd/"]', (as) => {
+                        const set = new Set();
+                        for (const a of as) {
+                            const href = a.getAttribute('href') || '';
+                            if (/\/rpd\/\d+/i.test(href)) {
+                                try {
+                                    const url = new URL(href, location.href).href.split('?')[0];
+                                    set.add(url);
+                                } catch { /* noop */ }
+                            }
+                        }
+                        return Array.from(set);
+                    });
+                    crawlerLog.info(`LIST page ${pageNo} -> ${links.length} job links`);
 
                     if (collectDetails) {
-                        const remaining = RESULTS_WANTED - saved;
-                        const newLinks = links.filter(l => !seenUrls.has(l));
-                        newLinks.forEach(l => seenUrls.add(l));
-                        const toEnqueue = newLinks.slice(0, Math.max(0, remaining));
-                        if (toEnqueue.length) await enqueueLinks({ urls: toEnqueue, userData: { label: 'DETAIL' } });
+                        await enqueueDetail(crawler, links);
                     } else {
                         const remaining = RESULTS_WANTED - saved;
-                        const newLinks = links.filter(l => !seenUrls.has(l));
-                        newLinks.forEach(l => seenUrls.add(l));
-                        const toPush = newLinks.slice(0, Math.max(0, remaining));
-                        if (toPush.length) { 
-                            await Dataset.pushData(toPush.map(u => ({ url: u, _source: 'jobs.cz' }))); 
-                            saved += toPush.length; 
+                        const uniqueLinks = dedupe ? links.filter(l => !seenUrls.has(l)) : links;
+                        uniqueLinks.forEach(l => seenUrls.add(l));
+                        const toPush = uniqueLinks.slice(0, Math.max(0, remaining)).map(u => ({ url: u, _source: 'jobs.cz' }));
+                        if (toPush.length) {
+                            await Dataset.pushData(toPush);
+                            saved += toPush.length;
                         }
                     }
 
                     if (saved < RESULTS_WANTED && pageNo < MAX_PAGES && links.length > 0) {
-                        const next = findNextPage($, request.url, pageNo);
-                        if (next) await enqueueLinks({ urls: [next], userData: { label: 'LIST', pageNo: pageNo + 1 } });
+                        const pageHtml = await page.content();
+                        const $page = cheerioLoad(pageHtml);
+                        const next = findNextPage($page, request.url, pageNo);
+                        if (next) await crawler.addRequests([{ url: next, userData: { label: 'LIST', pageNo: pageNo + 1 } }]);
                     }
                     return;
                 }
@@ -141,6 +162,9 @@ async function main() {
                 if (label === 'DETAIL') {
                     if (saved >= RESULTS_WANTED) return;
                     try {
+                        await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
+                        const html = await page.content();
+                        const $ = cheerioLoad(html);
                         const json = extractFromJsonLd($);
                         const data = json || {};
                         
