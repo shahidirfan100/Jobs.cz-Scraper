@@ -1,6 +1,57 @@
 {
   "actorSpecification": 1,
-  "fields": {},
+  "fields": {
+    "title": {
+      "title": "Job Title",
+      "type": "string",
+      "description": "The job title or position name"
+    },
+    "company": {
+      "title": "Company Name",
+      "type": "string",
+      "description": "Name of the hiring company or organization"
+    },
+    "category": {
+      "title": "Job Category",
+      "type": "string",
+      "description": "Job category or industry classification"
+    },
+    "location": {
+      "title": "Location",
+      "type": "string",
+      "description": "Job location (city, region, or country)"
+    },
+    "salary": {
+      "title": "Salary Range",
+      "type": "string",
+      "description": "Salary information in CZK or other currency"
+    },
+    "job_type": {
+      "title": "Employment Type",
+      "type": "string",
+      "description": "Type of employment (full-time, part-time, contract, etc.)"
+    },
+    "date_posted": {
+      "title": "Date Posted",
+      "type": "string",
+      "description": "Date when the job was posted or published"
+    },
+    "description_html": {
+      "title": "Description (HTML)",
+      "type": "string",
+      "description": "Full job description in HTML format"
+    },
+    "description_text": {
+      "title": "Description (Text)",
+      "type": "string",
+      "description": "Plain text version of the job description"
+    },
+    "url": {
+      "title": "Job URL",
+      "type": "string",
+      "description": "Direct link to the job posting on Jobs.cz"
+    }
+  },
   "views": {
     "overview": {
       "title": "Overview",
@@ -35,15 +86,15 @@
             "format": "text"
           },
           "job_type": {
-            "label": "Job Type",
+            "label": "Employment Type",
             "format": "text"
           },
           "date_posted": {
-            "label": "Posted",
+            "label": "Posted Date",
             "format": "text"
           },
           "url": {
-            "label": "URL",
+            "label": "Job Link",
             "format": "link"
           }
         }

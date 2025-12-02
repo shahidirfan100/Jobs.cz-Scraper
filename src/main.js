@@ -144,29 +144,114 @@ async function main() {
                         const json = extractFromJsonLd($);
                         const data = json || {};
                         
-                        // Fallback to HTML parsing if JSON-LD not available
-                        if (!data.title) data.title = $('h1').first().text().trim() || $('[itemprop="title"]').first().text().trim() || null;
-                        if (!data.company) data.company = $('[itemprop="hiringOrganization"], [class*="company"], .company').first().text().trim() || null;
-                        if (!data.description_html) { 
-                            const desc = $('[itemprop="description"], [class*="description"], .job-description, .description').first(); 
-                            data.description_html = desc && desc.length ? String(desc.html()).trim() : null; 
+                        // Title extraction
+                        if (!data.title) {
+                            data.title = $('h1').first().text().trim() || 
+                                        $('[itemprop="title"]').first().text().trim() || 
+                                        $('header h1').first().text().trim() || null;
                         }
-                        data.description_text = data.description_html ? cleanText(data.description_html) : null;
-                        if (!data.location) data.location = $('[itemprop="jobLocation"], [class*="location"], .location').first().text().trim() || null;
+                        
+                        // Company name extraction - multiple fallback strategies
+                        if (!data.company) {
+                            data.company = $('[itemprop="hiringOrganization"] [itemprop="name"]').first().text().trim() ||
+                                          $('[itemprop="hiringOrganization"]').first().text().trim() ||
+                                          $('.company-name').first().text().trim() ||
+                                          $('a[href*="/spolecnosti/"]').first().text().trim() ||
+                                          $('[class*="company"]').filter((i, el) => {
+                                              const txt = $(el).text().trim();
+                                              return txt.length > 0 && txt.length < 100 && !txt.includes('\n');
+                                          }).first().text().trim() || null;
+                        }
+                        
+                        // Location extraction
+                        if (!data.location) {
+                            data.location = $('[itemprop="jobLocation"] [itemprop="address"]').first().text().trim() ||
+                                           $('[itemprop="jobLocation"]').first().text().trim() ||
+                                           $('[class*="location"]').first().text().trim() ||
+                                           $('a[href*="mapy.cz"]').first().text().trim() || null;
+                        }
+                        
+                        // Salary extraction
                         if (!data.salary) {
-                            const salaryText = $('[itemprop="baseSalary"], [class*="salary"], .salary').first().text().trim();
-                            data.salary = salaryText || null;
+                            data.salary = $('[itemprop="baseSalary"]').first().text().trim() ||
+                                         $('.salary').first().text().trim() ||
+                                         $('[class*="salary"]').first().text().trim() ||
+                                         $('*').filter((i, el) => {
+                                             const txt = $(el).text();
+                                             return /\d+\s*(?:000)?\s*(?:-|–|až)\s*\d+\s*(?:000)?\s*Kč/i.test(txt);
+                                         }).first().text().trim() || null;
                         }
-                        if (!data.job_type) data.job_type = $('[itemprop="employmentType"], [class*="employment-type"]').first().text().trim() || null;
+                        
+                        // Job type / Employment form extraction
+                        if (!data.job_type) {
+                            data.job_type = $('[itemprop="employmentType"]').first().text().trim() ||
+                                           $('*:contains("Employment form")').next().text().trim() ||
+                                           $('*:contains("Position type")').parent().text().replace(/Position type:?\s*/i, '').trim() ||
+                                           $('dt:contains("Employment form")').next('dd').text().trim() ||
+                                           $('*').filter((i, el) => {
+                                               const txt = $(el).text().toLowerCase();
+                                               return (txt.includes('full-time') || txt.includes('full time') || 
+                                                      txt.includes('part-time') || txt.includes('contract')) && 
+                                                      txt.length < 50;
+                                           }).first().text().trim() || null;
+                        }
+                        
+                        // Description extraction - comprehensive approach
+                        if (!data.description_html) {
+                            const descSelectors = [
+                                '[itemprop="description"]',
+                                '.job-description',
+                                '[class*="description"]',
+                                '[class*="job-detail"]',
+                                'article',
+                                '.content',
+                                'main'
+                            ];
+                            
+                            for (const sel of descSelectors) {
+                                const elem = $(sel).first();
+                                if (elem.length && elem.text().trim().length > 100) {
+                                    data.description_html = String(elem.html()).trim();
+                                    break;
+                                }
+                            }
+                            
+                            // If still no description, try to get main content area
+                            if (!data.description_html) {
+                                const mainContent = $('body').find('*').filter((i, el) => {
+                                    const txt = $(el).text().trim();
+                                    return txt.length > 200 && $(el).children().length > 2;
+                                }).first();
+                                if (mainContent.length) {
+                                    data.description_html = String(mainContent.html()).trim();
+                                }
+                            }
+                        }
+                        
+                        // Description text from HTML
+                        data.description_text = data.description_html ? cleanText(data.description_html) : null;
+                        
+                        // Date posted extraction
                         if (!data.date_posted) {
-                            const dateText = $('[itemprop="datePosted"], [class*="date-posted"], .posted-date, time').first().text().trim();
-                            data.date_posted = dateText || null;
+                            data.date_posted = $('[itemprop="datePosted"]').attr('content') ||
+                                              $('[itemprop="datePosted"]').first().text().trim() ||
+                                              $('time[datetime]').attr('datetime') ||
+                                              $('time').first().text().trim() ||
+                                              $('[class*="date"]').first().text().trim() || null;
+                        }
+                        
+                        // Category extraction from page if not provided
+                        let jobCategory = category;
+                        if (!jobCategory) {
+                            jobCategory = $('[itemprop="industry"]').first().text().trim() ||
+                                        $('[class*="category"]').first().text().trim() ||
+                                        $('*:contains("Listed in")').parent().text().replace(/Listed in:?\s*/i, '').trim() || null;
                         }
 
                         const item = {
                             title: data.title || null,
                             company: data.company || null,
-                            category: category || null,
+                            category: jobCategory || null,
                             location: data.location || null,
                             salary: data.salary || null,
                             job_type: data.job_type || null,
@@ -178,8 +263,11 @@ async function main() {
 
                         await Dataset.pushData(item);
                         saved++;
-                        crawlerLog.info(`Scraped job ${saved}/${RESULTS_WANTED}: ${item.title}`);
-                    } catch (err) { crawlerLog.error(`DETAIL ${request.url} failed: ${err.message}`); }
+                        crawlerLog.info(`Scraped job ${saved}/${RESULTS_WANTED}: ${item.title} at ${item.company || 'Unknown'}`);
+                    } catch (err) { 
+                        crawlerLog.error(`DETAIL ${request.url} failed: ${err.message}`);
+                        crawlerLog.error(err.stack);
+                    }
                 }
             }
         });
