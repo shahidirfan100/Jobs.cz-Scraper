@@ -176,69 +176,42 @@ Actor.main(async () => {
         }
     };
 
-    // Focused job-body extractor that avoids header/nav/footer and modals
+    // Extract only the real job body: between "Pracovní nabídka / Job description"
+    // and "Informace o pozici / Position information / About the position"
     const extractDescriptionHtml = ($) => {
-        // Remove obvious non-description areas before we pick any content
-        $(
-            'header, nav, footer, form, aside, ' +
-                '.Header, .HeaderNav, .HeaderNavItem, [class*="Header"], [class*="Nav"], ' +
-                '.Footer, [class*="footer"], ' +
-                '.Alert, ' +
-                '[role="dialog"], [class*="Modal"], [id*="modal"], ' +
-                '.JobDescriptionSendAdToEmailModal, .TextField, .TextArea, ' +
-                '.Cookie, [class*="cookie"]',
-        ).remove();
-
         let descriptionHtml = null;
 
-        // 1) Czech pattern: Úvodní představení / Pracovní nabídka -> Informace o pozici
-        const start = $('*:contains("Úvodní představení"), *:contains("Pracovní nabídka")')
+        // Start label: Pracovní nabídka / Job description / Job offer
+        const startLabel = $('p')
             .filter((i, el) =>
-                /Úvodní představení|Pracovní nabídka/i.test($(el).text()),
+                /Pracovní nabídka|Job description|Job offer/i.test(
+                    $(el).text(),
+                ),
             )
             .first();
-        const end = $('*:contains("Informace o pozici")')
-            .filter((i, el) => /Informace o pozici/i.test($(el).text()))
+
+        // End label: Informace o pozici / Position information / About the position
+        const endLabel = $('p')
+            .filter((i, el) =>
+                /Informace o pozici|Position information|About the position/i.test(
+                    $(el).text(),
+                ),
+            )
             .first();
 
-        if (start.length && end.length) {
+        if (startLabel.length && endLabel.length) {
             const parts = [];
-            let current = start.next();
-            while (current.length && current[0] !== end[0]) {
+            let current = startLabel.next();
+            while (current.length && current[0] !== endLabel[0]) {
                 parts.push($.html(current));
                 current = current.next();
             }
             descriptionHtml = parts.join('\n').trim() || null;
         }
 
-        // 2) English-ish fallback: Job description / Job offer -> Position information
+        // Fallback: if we didn't find those anchors (other layout)
         if (!descriptionHtml) {
-            const startEn = $('*:contains("Job description"), *:contains("Job offer")')
-                .filter((i, el) =>
-                    /Job description|Job offer/i.test($(el).text()),
-                )
-                .first();
-            const endEn = $('*:contains("Position information"), *:contains("About the position")')
-                .filter((i, el) =>
-                    /Position information|About the position/i.test(
-                        $(el).text(),
-                    ),
-                )
-                .first();
-
-            if (startEn.length && endEn.length) {
-                const parts = [];
-                let current = startEn.next();
-                while (current.length && current[0] !== endEn[0]) {
-                    parts.push($.html(current));
-                    current = current.next();
-                }
-                descriptionHtml = parts.join('\n').trim() || null;
-            }
-        }
-
-        // 3) Heuristic fallback: biggest "job-looking" content block
-        if (!descriptionHtml) {
+            // Look for a container that has job-like keywords but not nav text
             const jobKeywords = /(Náplň práce|Požadujeme|Co nabízíme|Co u nás získáte|Co vás čeká|Job description|Responsibilities|We offer|Requirements)/i;
             const headerWords = /(Nabídky práce|Brigády|Inspirace|Zaměstnavatelé|Vytvořit si životopis|Pro firmy)/i;
 
@@ -266,8 +239,19 @@ Actor.main(async () => {
 
         if (!descriptionHtml) return null;
 
-        // 4) Whitelist only the tags we care about
+        // Now clean inside the snippet: remove apply / save / share / print / report buttons
         const $$ = cheerioLoad(descriptionHtml);
+
+        $$(
+            '[class*="Button"], ' +
+            '[data-track-event], [data-track-social], ' +
+            '[data-test^="jd-"], ' +
+            'a[href^="javascript:window.print"], ' +
+            'a[href*="sharer.php"], a[href*="twitter.com/intent"], ' +
+            'a[href*="kontakt/?reportJobAdId"]',
+        ).remove();
+
+        // Whitelist only the tags we care about
         const allowedTags = new Set([
             'p',
             'br',
@@ -514,7 +498,7 @@ Actor.main(async () => {
                                 .text()
                                 .trim() || null;
 
-                        // dt/dd: "Employment form" / "Forma spolupráce" / "Typ úvazku"
+                        // dt/dd: "Employment form" / "Forma spolupráce" / "Typ úvazku" / "Úvazek"
                         if (!data.job_type) {
                             const dt = $('dt:contains("Employment form"), dt:contains("Forma spolupráce"), dt:contains("Typ úvazku"), dt:contains("Úvazek")')
                                 .filter((i, el) =>
@@ -556,7 +540,7 @@ Actor.main(async () => {
                             }
                         }
 
-                        // Heuristic: look for typical job-type words
+                        // Heuristic: typical job-type words
                         if (!data.job_type) {
                             const jtCandidate = $('*')
                                 .filter((i, el) => {
@@ -591,7 +575,7 @@ Actor.main(async () => {
                         data.job_type = jt || null;
                     }
 
-                    // DESCRIPTION HTML + TEXT (main job body, no header/nav/modal)
+                    // DESCRIPTION HTML + TEXT
                     if (!data.description_html) {
                         data.description_html = extractDescriptionHtml($);
                     }
@@ -642,7 +626,7 @@ Actor.main(async () => {
                         }
                     }
 
-                    // Category extraction
+                    // Category
                     let jobCategory = category;
                     if (!jobCategory) {
                         jobCategory =
@@ -687,7 +671,7 @@ Actor.main(async () => {
 
                     jobCategory = cleanLabel(jobCategory);
 
-                    // Optional: light cleanup on company/location
+                    // Optional cleanup on company/location
                     data.company = cleanLabel(data.company) || data.company;
                     data.location = cleanLabel(data.location) || data.location;
 
