@@ -4,12 +4,6 @@
   "type": "object",
   "schemaVersion": 1,
   "properties": {
-    "startUrl": {
-      "title": "Start URL",
-      "type": "string",
-      "description": "Start scraping from a specific Jobs.cz search URL. If provided, this overrides the Keyword/Location/Category fields.",
-      "editor": "textfield"
-    },
     "keyword": {
       "title": "Job Keyword",
       "type": "string",
